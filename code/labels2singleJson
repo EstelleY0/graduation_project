@@ -1,0 +1,58 @@
+import os
+import json
+
+def extract_labels_from_json(folder_path):
+    label_dict = {}
+
+    # Iterate over each JSON file in the folder
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".json"):
+            file_path = os.path.join(folder_path, filename)
+
+            # Read JSON data from the file
+            with open(file_path, 'r') as file:
+                json_data = json.load(file)
+
+            # Extract required fields from JSON data
+            video_name = json_data["video"]["video_name"] + ".mp4"
+            labels = [
+                json_data["video"]["video_point_of_view"],
+                json_data["video"]["accident_negligence_rateA"],
+                json_data["video"]["accident_negligence_rateB"],
+                json_data["video"]["accident_object"],
+                json_data["video"]["accident_place"],
+                json_data["video"]["accident_place_feature"],
+                json_data["video"]["vehicle_a_progress_info"],
+                json_data["video"]["vehicle_b_progress_info"],
+                json_data["video"]["traffic_accident_type"],
+                json_data["video"]["lane_violation_A"],
+                json_data["video"]["lane_violation_B"],
+                json_data["video"]["break_A"],
+                json_data["video"]["break_B"],
+                json_data["video"]["turnlight_A"],
+                json_data["video"]["turnlight_B"],
+                json_data["video"]["proper_timing_A"],
+                json_data["video"]["proper_timing_B"]
+            ]
+
+            # Add labels to the dictionary
+            label_dict[video_name] = labels
+
+    return label_dict
+
+def save_labels_to_json(label_dict, output_file):
+    # Write the label dictionary to a new JSON file
+    with open(output_file, 'w') as file:
+        json.dump(label_dict, file, indent=4)
+
+# Folder containing JSON files
+folder_path = "C:/Users/skku/Desktop/New folder/label"
+
+# Extract labels from JSON files
+label_dict = extract_labels_from_json(folder_path)
+
+# Output file to save the label dictionary
+output_file = "labels.json"
+
+# Save the label dictionary to a new JSON file
+save_labels_to_json(label_dict, output_file)
