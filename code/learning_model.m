@@ -1,16 +1,16 @@
-% 맵을 사용하여 클래스 이름을 인덱스로 변환
-classNames = {'lane_violation_A', 'lane_violation_B', 'break_A', 'break_B','proper_timing_A', 'proper_timing_B', 'turnlight_A', 'turnlight_B'};
+% Map class names to indices
+classNames = {'lane_violation_A', 'lane_violation_B', 'break_A', 'break_B', 'proper_timing_A', 'proper_timing_B', 'turnlight_A', 'turnlight_B'};
 classMap = containers.Map(classNames, 1:numel(classNames));
 
-% JSON 파일을 읽어들이고 클래스를 추출
-jsonFile = 'labels.json'; % JSON 파일 경로를 실제 파일 경로로 업데이트
+% Read JSON file and extract class information
+jsonFile = 'labels.json'; % Update to the actual path of the JSON file
 fid = fopen(jsonFile); 
 raw = fread(fid, inf); 
 str = char(raw'); 
 fclose(fid); 
 labelData = jsondecode(str);
 
-% 클래스를 숫자로 변환하고 특징과 함께 저장
+% Initialize cells to store features and labels for all classes
 allFeaturesCell = cell(1, numel(classNames));
 allLabelsCell = cell(1, numel(classNames));
 
@@ -19,24 +19,33 @@ net = googlenet;
 inputSize = net.Layers(1).InputSize;
 featureLayer = 'pool5-7x7_s1';
 
+% Get the list of videos
 videoNames = fieldnames(labelData);
+
+% Select the last video for validation
+validationVideoIdx = numel(videoNames);
+validationVideoName = videoNames{validationVideoIdx};
+
+% Initialize validation features and labels
+validationFeatures = [];
+validationLabels = [];
+
 for videoIdx = 1:numel(videoNames)
     fprintf("%d video processing\n", videoIdx);
     videoName = videoNames{videoIdx};
     classValues = labelData.(videoName);
     
-    % 클래스 이름을 인덱스로 변환
-    classIndices = zeros(1, numel(classNames)); % 클래스 인덱스 배열 초기화
-    
+    % Convert class names to indices
+    classIndices = zeros(1, numel(classNames));
     for classIdx = 1:numel(classNames)
-        if ismember(classNames{classIdx}, classValues) % 클래스가 존재하는 경우
-            classIndices(classIdx) = classMap(classNames{classIdx}); % 해당 인덱스 할당
+        if ismember(classNames{classIdx}, classValues)
+            classIndices(classIdx) = 1;
         else
-            classIndices(classIdx) = 0; % 매핑되지 않은 경우 0으로 설정
+            classIndices(classIdx) = 0;
         end
     end
     
-    % 특징 추출 및 저장
+    % Extract and store features
     videoFolder = fullfile('output', videoName);
     imds = imageDatastore(videoFolder, 'FileExtensions', {'.jpg', '.png', '.jpeg'}, 'LabelSource', 'none');
     numFrames = numel(imds.Files);
@@ -56,60 +65,88 @@ for videoIdx = 1:numel(videoNames)
         end
     end
     
+    % Store features and labels, separating validation data
     for classIdx = 1:numel(classNames)
-        allFeaturesCell{classIdx} = [allFeaturesCell{classIdx}; videoFeaturesCell{classIdx}];
-        allLabelsCell{classIdx} = [allLabelsCell{classIdx}; repmat(classIndices(classIdx), size(videoFeaturesCell{classIdx}, 1), 1)];
+        if videoIdx == validationVideoIdx
+            validationFeatures = [validationFeatures; videoFeaturesCell{classIdx}];
+            validationLabels = [validationLabels; repmat(classIndices(classIdx), size(videoFeaturesCell{classIdx}, 1), 1)];
+        else
+            allFeaturesCell{classIdx} = [allFeaturesCell{classIdx}; videoFeaturesCell{classIdx}];
+            allLabelsCell{classIdx} = [allLabelsCell{classIdx}; repmat(classIndices(classIdx), size(videoFeaturesCell{classIdx}, 1), 1)];
+        end
     end
 end
+
+%%
 
 % Train and test LSTM models for each class
 models = cell(1, numel(classNames));
 accuracies = zeros(1, numel(classNames));
 
 %%
+
 for classIdx = 1:numel(classNames)
     trainFeatures = allFeaturesCell{classIdx};
     trainLabels = categorical(allLabelsCell{classIdx});
     
     % Reshape features to match LSTM input layer
-    numFrames = size(trainFeatures, 1); % 시간 축이 첫 번째 차원이므로 trainFeatures의 3번째 차원을 사용
-    numFeatures = size(trainFeatures, 3); % 특징 차원은 첫 번째 차원
-    trainFeaturesReshaped = reshape(trainFeatures, [], 1, numFeatures); % 수정 후
+    numFrames = size(trainFeatures, 1);
+    numFeatures = size(trainFeatures, 2);
+    trainFeaturesReshaped = reshape(trainFeatures, numFrames,numFeatures, 1);
+    
     % Preallocate the trainFeaturesCell cell array
     trainFeaturesCell = cell(numFrames, 1);
-    
-    % Iterate over the third dimension of trainFeaturesReshaped
-    for frameIdx = 1:numFrames %8400
-        % Assign each slice to a cell in the trainFeaturesCell array
-        trainFeaturesCell{frameIdx} = trainFeaturesReshaped( frameIdx, :, :);
+    for frameIdx = 1:numFrames
+        trainFeaturesCell{frameIdx} = trainFeaturesReshaped(frameIdx, :, :).';
     end
 
     % Define LSTM network architecture
-    numHiddenUnits = 100;
+    numHiddenUnits = 20;
     layers = [
         sequenceInputLayer(numFeatures)
         lstmLayer(numHiddenUnits, 'OutputMode', 'last')
         fullyConnectedLayer(numel(unique(trainLabels)))
         softmaxLayer
         classificationLayer];
+
+    % Create a validation set using a portion of the training data
+    valIdx = randperm(size(trainFeaturesCell, 1), round(0.3 * size(trainFeaturesCell, 1))); % 20% of training data for validation
+    trainIdx = setdiff(1:size(trainFeaturesCell, 1), valIdx);
     
-    % Train the LSTM network
+    trainFeaturesCellTrain = trainFeaturesCell(trainIdx);
+    trainLabelsTrain = trainLabels(trainIdx);
+    trainFeaturesCellVal = trainFeaturesCell(valIdx);
+    trainLabelsVal = trainLabels(valIdx);
+    
+    % Train the LSTM network with validation
     options = trainingOptions('adam', ...
-        'MaxEpochs', 20, ...
+        'MaxEpochs', 10, ...
         'MiniBatchSize', 64, ...
-        'InitialLearnRate', 0.001, ...
+        'InitialLearnRate', 0.0005, ...
         'GradientThreshold', 1, ...
-        'Verbose', true);
+        'Verbose', false, ...
+        'ValidationData', {trainFeaturesCellVal, trainLabelsVal}, ... 
+        'ValidationFrequency', 50, ... 
+        'ValidationPatience', 5, ...
+        'Plots', 'training-progress'); 
     
+    netLSTM = trainNetwork(trainFeaturesCellTrain, trainLabelsTrain, layers, options);
+
+    % Test the LSTM network on validation data
+    numValFrames = size(validationFeatures, 1);
+    validationFeaturesReshaped = reshape(validationFeatures, numValFrames, numFeatures, 1);
+    validationFeaturesCell = cell(numValFrames, 1);
+    for frameIdx = 1:numValFrames
+        validationFeaturesCell{frameIdx} = validationFeaturesReshaped(frameIdx, :, :).';
+    end
+    validationLabelsCategorical = categorical(validationLabels);
     
-    netLSTM = trainNetwork(trainFeaturesCell, trainLabels, layers, options); %traqinlabels: 8400by1
-    models{classIdx} = netLSTM;
-    
-    % Test the LSTM network
-    predictedLabels = classify(netLSTM, trainFeaturesCell);
-    accuracies(classIdx) = sum(predictedLabels == trainLabels) / numel(trainLabels);
+    predictedLabels = classify(netLSTM, validationFeaturesCell);
+
+    accuracies(classIdx) = sum(predictedLabels == validationLabelsCategorical) / numel(validationLabelsCategorical);
 end
 
+%%
 % Calculate overall accuracy
 overallAccuracy = mean(accuracies);
 disp(['Overall Accuracy: ', num2str(overallAccuracy)]);
