@@ -131,6 +131,7 @@ for classIdx = 1:numel(classNames)
         'Plots', 'training-progress'); 
     
     netLSTM = trainNetwork(trainFeaturesCellTrain, trainLabelsTrain, layers, options);
+    models{classIdx} = netLSTM;
 
     % Test the LSTM network on validation data
     numValFrames = size(validationFeatures, 1);
@@ -150,3 +151,8 @@ end
 % Calculate overall accuracy
 overallAccuracy = mean(accuracies);
 disp(['Overall Accuracy: ', num2str(overallAccuracy)]);
+
+
+%%
+% Save the models cell array
+save('models.mat', 'models');
